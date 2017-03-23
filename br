@@ -1,0 +1,181 @@
+#!/bin/bash
+# Скрипт для бэкапирования и восстановления папок на сервере по SSH тоннелю 
+# Автор: Miksha
+# Контакт: https://fb.com/miksha.happy
+# Версия: 1.0
+# Внимание! Скрипт находится в стадии доработки. В боевом коде на ваш страх и риск. 
+# В следующей версии доработаю исключения и добавлю плюшечек в опциях.
+
+# цвета
+GREEN=`tput setaf 2`
+YELLOW=`tput setaf 3`
+NC=`tput sgr0`
+
+
+LOCAL_PATH_RSA=''               # Путь к id-rsa openSSH на локальной машине
+LOCAL_PATH_WORK=''              # Путь к рабочей папке на локальной машине
+REMOTE_PATH_WORK=''             # Путь к рабочей папке на удаленном сервере
+REMOTE_PATHS=''                 # Пути к папкам через пробел. Папки, которые нужно забэкапить
+REMOTE_PATH='' 	                # Путь к текущей папке на удаленном сервере, которую нужно забэкапить
+ARCHIVE_SUFFIX='_back'          # Добавляется к названию архива. Например, _back
+#
+REMOTE_IP='' 		                # IP адрес или хост удаленного сервера
+REMOTE_PORT='22' 	              # Порт SSH на удаленном сервере. Обычно 22, но лучше поменять.     
+REMOTE_USER='user'              # Пользователь на удаленном сервере
+#
+REMOTE_SUDO_PASS='' 				    # Пароль привелигированного пользователя на удаленном сервере. Чтобы использовать закомментируй в коде вызов функции getsudopass
+ARCHIVE_NAME=""                 # Название архива. Конкатенируется из названия папки, суффикса и расширения .tar 
+PASSPHRASE=""                   # Парольная фраза к приватному ключу. Чтобы использовать закомментируй в коде вызов функции getpassphrase
+#target=`` 						          # Переданный параметр
+
+
+
+start_ssh_agent(){
+
+# стартуем ssh-agent 
+if [ -z "$SSH_AUTH_SOCK" ] ; then
+  eval `ssh-agent -s` > /dev/null
+  #ssh-add $LOCAL_PATH_RSA
+  # вводим парольную фразу скриптом
+  echo "exec cat" > ap-cat.sh
+  chmod a+x ap-cat.sh
+  export DISPLAY=1
+  echo $PASSPHRASE | SSH_ASKPASS=./ap-cat.sh ssh-add $LOCAL_PATH_RSA 
+  rm ap-cat.sh
+fi
+
+}
+
+getpassphrase(){
+# запрашиваем парольную фразу к приватному ключу
+read -p 'Введите парольную фразу к приватному ключу: ' -s PASSPHRASE 
+echo -e '\n'
+}
+
+getsudopass(){
+# запрашиваем пароль для привелигированного пользователя на удаленном сервере
+read -p 'Введите пароль на удаленном сервере: ' -s REMOTE_SUDO_PASS 
+echo -e '\n'
+}
+
+
+backup(){
+	
+getpassphrase      # закомментируй, чтобы забирать парольную фразу из переменной (не рекомендуется)
+getsudopass        # закомментируй, чтобы забирать пароль из переменной (не рекомендуется)
+start_ssh_agent
+
+
+#архивирую 
+for REMOTE_PATH in $REMOTE_PATHS
+do
+    
+    #echo -e "Путь: ${REMOTE_PATH}\n"
+    ARCHIVE_NAME=$(basename $REMOTE_PATH)$ARCHIVE_SUFFIX'.tar'
+    #echo -e "Папка: ${ARCHIVE_NAME}\n"
+    exec_scr=$exec_scr'cd '$REMOTE_PATH'; tar -czvf '$REMOTE_PATH_WORK'/'$ARCHIVE_NAME' .; ' 
+    list_files=$list_files'\n '$ARCHIVE_NAME # список архивов
+done  
+#echo -e "Код: \n${GREEN}${exec_scr}${NC}\n"
+ssh  -p $REMOTE_PORT  $REMOTE_USER@$REMOTE_IP -t " echo '$REMOTE_SUDO_PASS' | sudo -S bash -c '${exec_scr}'" 
+printf  "${GREEN}Архивы созданы:${YELLOW}${list_files}${NC}\n"
+printf  "Копирую на локальную машину\n"
+
+# качаем архивы на локальную машину
+for REMOTE_PATH in $REMOTE_PATHS
+do
+    #echo -e "Путь: ${REMOTE_PATH}\n"
+    ARCHIVE_NAME=$(basename $REMOTE_PATH)$ARCHIVE_SUFFIX'.tar'
+    #echo -e "Папка: ${ARCHIVE_NAME}\n"
+    scp -P $REMOTE_PORT  $REMOTE_USER@$REMOTE_IP:$REMOTE_PATH_WORK/$ARCHIVE_NAME $LOCAL_PATH_WORK/
+    printf  "${GREEN}Копирование архива ${YELLOW}${ARCHIVE_NAME} ${GREEN}завершено. ${NC}\n"
+done 
+
+# удаляю копии архивов на сервере
+exec_scr='cd '$REMOTE_PATH_WORK';'
+for REMOTE_PATH in $REMOTE_PATHS
+do
+    #echo -e "Путь: ${REMOTE_PATH}\n"
+    ARCHIVE_NAME=$(basename $REMOTE_PATH)$ARCHIVE_SUFFIX'.tar'
+    #echo -e "Папка: ${ARCHIVE_NAME}\n"
+    exec_scr=$exec_scr' rm -f '$ARCHIVE_NAME'; ' 
+    #echo -e "Код: \n${GREEN}${exec_scr}${NC}\n"
+done
+
+ssh  -p $REMOTE_PORT  $REMOTE_USER@$REMOTE_IP -t "echo '$REMOTE_SUDO_PASS' | sudo -S bash -c '${exec_scr}'" 
+printf  "${GREEN}Бэкап завершен.${NC}\n"
+ 
+# убить агента
+eval `ssh-agent -k` > /dev/null 
+
+}
+
+restore(){
+	
+getpassphrase     # закомментируй, чтобы забирать парольную фразу из переменной (не рекомендуется)
+getsudopass       # закомментируй, чтобы забирать пароль из переменной (не рекомендуется)
+start_ssh_agent
+
+#закачиваю архивы на сервер
+for REMOTE_PATH in $REMOTE_PATHS
+do
+ARCHIVE_NAME=$(basename $REMOTE_PATH)$ARCHIVE_SUFFIX'.tar'  
+scp -P $REMOTE_PORT  $LOCAL_PATH_WORK/$ARCHIVE_NAME $REMOTE_USER@$REMOTE_IP:$REMOTE_PATH_WORK
+printf  "${GREEN}Закачивание архива ${YELLOW}${ARCHIVE_NAME}${GREEN} завершено. ${NC}\n"
+done
+
+for REMOTE_PATH in $REMOTE_PATHS
+do
+    ARCHIVE_NAME=$(basename $REMOTE_PATH)$ARCHIVE_SUFFIX'.tar'
+    list_files=$list_files'\n '$ARCHIVE_NAME # список архивов
+    # восстанавливаем 
+    exec_scr=$exec_scr'rm -rf '$REMOTE_PATH'; mkdir '$REMOTE_PATH'; tar -xzvf '$ARCHIVE_NAME' -C '$REMOTE_PATH'; ' 
+    # удаляем копии архивов на сервере
+    exec_scr=$exec_scr'cd '$REMOTE_PATH_WORK'; rm -f '$ARCHIVE_NAME';' 
+done  
+
+ssh  -p $REMOTE_PORT  $REMOTE_USER@$REMOTE_IP -t " echo '$REMOTE_SUDO_PASS' | sudo -S bash -c '${exec_scr}'" 
+printf  "${GREEN}Восстановление архивов завершено:${YELLOW}${list_files}${NC}\n"
+ 
+# убить агента
+eval `ssh-agent -k` > /dev/null
+
+}
+
+# Parse options to the `br` command. Manual: goo.gl/VReiEU
+while getopts ":hbr" opt; do
+  case ${opt} in
+    h )
+      echo "Использование: br [опции]"
+      echo "Опции:"
+      echo "  -h                      Посмотреть помощь."
+      echo "  -b                      Сохранить на локальную машину."
+      echo "  -r                      Восстановить на удаленном сервере."
+      exit 0
+      ;;
+    b )
+      #target=$OPTARG
+      backup
+      exit 0
+      ;;
+    r )
+      #target=$OPTARG
+      restore
+      exit 0
+      ;;  
+   \? )
+     echo "Неверная опция: -$OPTARG" 1>&2
+     exit 1
+     ;;
+  #  : )
+  #   echo "Неверная опция: -$OPTARG требуется аргумент" 1>&2
+  #   exit 1
+  #  ;;
+      
+  esac
+
+done
+shift $((OPTIND -1))
+echo  "Вы не указали ни одного параметра." 1>&2
+exit 1
+
