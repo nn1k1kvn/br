@@ -43,7 +43,7 @@ PASSPHRASE=""                   # Парольная фраза к приват�
 
 
 ## Feedback:
-- Contact: [Miksha](https://fb.com/miksha.happy)
+- Contact: 
 
 ## You can show your gratitude to me :)
 - Bitcoin wallet: --
