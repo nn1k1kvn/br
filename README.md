@@ -43,7 +43,7 @@ PASSPHRASE=""                   # Парольная фраза к приват�
 
 
 ## Feedback:
-- Contact: 
+- Contact:  
 
 ## You can show your gratitude to me :)
 - Bitcoin wallet: --
